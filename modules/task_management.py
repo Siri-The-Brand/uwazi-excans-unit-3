@@ -6,32 +6,52 @@ import random
 # Database paths
 STUDENT_DB = "data/students.csv"
 TASK_PROGRESS_DB = "data/task_progress.csv"
-TASKS_DB = "data/unit3_tasks.csv"  # ✅ Add the main tasks CSV
+TASKS_DB = "data/unit3_tasks.csv"
 LEADERBOARD_DB = "data/leaderboard.csv"
 ACHIEVEMENTS_DB = "data/achievements.csv"
 DAILY_CHALLENGES_DB = "data/daily_challenges.csv"
+JOURNAL_DB = "data/journals.csv"
+
+# Ensure required folders exist
+UPLOADS_FOLDER = "uploads"
+os.makedirs(UPLOADS_FOLDER, exist_ok=True)
+
+# Ensure journal database exists
+if not os.path.exists(JOURNAL_DB):
+    pd.DataFrame(columns=["Student ID", "Task Name", "Journal Entry", "File Submission"]).to_csv(JOURNAL_DB, index=False)
 
 def load_student_data():
     """Load student profiles"""
     return pd.read_csv(STUDENT_DB) if os.path.exists(STUDENT_DB) else pd.DataFrame()
 
-def load_tasks():
-    """Load all tasks"""
-    return pd.read_csv(TASKS_DB) if os.path.exists(TASKS_DB) else pd.DataFrame()
+def load_daily_challenges():
+    """Load daily challenge data"""
+    return pd.read_csv(DAILY_CHALLENGES_DB) if os.path.exists(DAILY_CHALLENGES_DB) else pd.DataFrame()
 
-def load_student_tasks(student_id):
-    """Load tasks assigned to a specific student"""
-    tasks = pd.read_csv(TASK_PROGRESS_DB) if os.path.exists(TASK_PROGRESS_DB) else pd.DataFrame()
-    return tasks[tasks["Student ID"] == student_id]
+def load_leaderboard():
+    """Load leaderboard data"""
+    return pd.read_csv(LEADERBOARD_DB) if os.path.exists(LEADERBOARD_DB) else pd.DataFrame()
 
-def update_task_completion(student_id, task_name):
-    """Mark a task as completed"""
-    if os.path.exists(TASK_PROGRESS_DB):
-        tasks = pd.read_csv(TASK_PROGRESS_DB)
-        tasks.loc[(tasks["Student ID"] == student_id) & (tasks["Task Name"] == task_name), "Task Completed"] = "Yes"
-        tasks.to_csv(TASK_PROGRESS_DB, index=False)
-        return True
-    return False
+def update_leaderboard():
+    """Update leaderboard with student rankings based on XP and Umeme Points"""
+    students = load_student_data()
+
+    if not students.empty:
+        leaderboard = students[["Student ID", "Name", "XP Points", "Umeme Points"]]
+        leaderboard.to_csv(LEADERBOARD_DB, index=False)
+
+def save_journal_entry(student_id, task_name, journal_text, file_submission=None):
+    """Save journal text or file submission"""
+    journals = pd.read_csv(JOURNAL_DB) if os.path.exists(JOURNAL_DB) else pd.DataFrame()
+
+    # Remove existing entry for the same task
+    journals = journals[~((journals["Student ID"] == student_id) & (journals["Task Name"] == task_name))]
+
+    # Add new entry
+    new_entry = pd.DataFrame([[student_id, task_name, journal_text, file_submission]],
+                             columns=["Student ID", "Task Name", "Journal Entry", "File Submission"])
+    journals = pd.concat([journals, new_entry])
+    journals.to_csv(JOURNAL_DB, index=False)
 
 def student_dashboard():
     st.subheader("🎮 Welcome to Your Siri Solver Dashboard")
@@ -54,60 +74,77 @@ def student_dashboard():
             # Display Profile & Achievements
             st.write(f"🧑‍🎓 **{student_name}** | 🎯 XP: {xp_points} | ⚡ Umeme Points: {umeme_points} | 🏆 Level: {level}")
 
-            # 📌 **Display Assigned Tasks**
-            st.subheader("📋 Your Tasks")
-            student_tasks = load_student_tasks(student_id)
-
-            if not student_tasks.empty:
-                for _, row in student_tasks.iterrows():
-                    task_name = row["Task Name"]
-                    completed = row["Task Completed"]
-
-                    st.write(f"**{task_name}** - {'✅ Completed' if completed == 'Yes' else '❌ Not Completed'}")
-
-                    # ✅ Button to mark task as completed
-                    if completed == "No":
-                        if st.button(f"✔️ Complete {task_name}"):
-                            update_task_completion(student_id, task_name)
-                            st.success(f"🎉 Task '{task_name}' marked as completed!")
-                            st.experimental_rerun()
-
-            else:
-                st.info("No tasks assigned yet!")
-
             # 🎲 **Daily Challenges**
             st.subheader("🎲 Daily Challenge")
-            daily_challenges = pd.read_csv(DAILY_CHALLENGES_DB) if os.path.exists(DAILY_CHALLENGES_DB) else pd.DataFrame()
+            daily_challenges = load_daily_challenges()
 
             if not daily_challenges.empty:
-                daily_challenge = daily_challenges.sample(1).iloc[0]
-                st.write(f"**{daily_challenge['Description']}**")
-                if st.button("Complete Daily Challenge"):
+                daily_challenge = daily_challenges.sample(1).iloc[0]  # Pick a random challenge
+                st.write(f"**Challenge:** {daily_challenge['Description']}")
+
+                if st.button("✅ Complete Daily Challenge"):
                     xp_reward = int(daily_challenge["XP Reward"])
                     umeme_reward = int(daily_challenge["Umeme Reward"])
-                    st.success(f"✅ Challenge completed! +{xp_reward} XP, +{umeme_reward} ⚡Umeme Points!")
+
+                    # Update student's XP & Umeme Points
+                    students.loc[students["Student ID"] == student_id, "XP Points"] += xp_reward
+                    students.loc[students["Student ID"] == student_id, "Umeme Points"] += umeme_reward
+                    students.to_csv(STUDENT_DB, index=False)
+
+                    # Update leaderboard
+                    update_leaderboard()
+
+                    st.success(f"🎉 Challenge completed! +{xp_reward} XP, +{umeme_reward} ⚡Umeme Points!")
+                    st.rerun()  # Refresh UI
 
             else:
-                st.warning("No daily challenges available.")
+                st.warning("⚠️ No daily challenges available.")
 
-            # 🎤 **File Upload for Journals**
-            st.subheader("📤 Upload Journal Submission")
-            uploaded_file = st.file_uploader("Upload Your Work (Image, Audio, Video)", type=["jpg", "png", "mp3", "mp4"])
+            # 🎤 **Journal Submission Section**
+            st.subheader("📖 Submit Your Journal Entry")
 
-            if uploaded_file:
-                file_path = f"uploads/{uploaded_file.name}"
-                with open(file_path, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
+            # Select Task for Journal Submission
+            student_tasks = pd.read_csv(TASK_PROGRESS_DB) if os.path.exists(TASK_PROGRESS_DB) else pd.DataFrame()
+            student_tasks = student_tasks[student_tasks["Student ID"] == student_id]
 
-                st.success("File uploaded successfully! 🎉")
+            if not student_tasks.empty:
+                selected_task = st.selectbox("Select a Task", student_tasks["Task Name"].unique())
 
-            # 📊 **AI Feedback Placeholder**
-            st.subheader("🤖 AI-Based Feedback (Coming Soon)")
-            st.write("Your work will be reviewed by AI and a CSE for feedback.")
+                # Show Existing Submission
+                journals = pd.read_csv(JOURNAL_DB) if os.path.exists(JOURNAL_DB) else pd.DataFrame()
+                existing_entry = journals[(journals["Student ID"] == student_id) & (journals["Task Name"] == selected_task)]
+
+                if not existing_entry.empty:
+                    st.write("✅ **Your Previous Submission:**")
+                    st.write(f"✏ **Journal Entry:** {existing_entry['Journal Entry'].values[0]}")
+
+                # Submit a New Journal Entry
+                st.subheader("✏ Text-Based Submission")
+                journal_text = st.text_area("Write your journal entry here...")
+
+                # Upload File (Optional)
+                st.subheader("📤 Upload File Submission (Optional)")
+                uploaded_file = st.file_uploader("Upload an image, audio, or video", type=["jpg", "png", "mp3", "mp4"])
+
+                file_path = None
+                if uploaded_file:
+                    file_path = os.path.join(UPLOADS_FOLDER, uploaded_file.name)
+                    with open(file_path, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+
+                # Submit Button
+                if st.button("Submit Journal Entry"):
+                    save_journal_entry(student_id, selected_task, journal_text, file_path)
+                    st.success(f"✅ Journal entry submitted for '{selected_task}'!")
+                    st.rerun()
+
+            else:
+                st.warning("⚠️ No tasks assigned yet. Please wait for assignments.")
 
             # 🏆 **Leaderboard**
             st.subheader("🏅 Class Leaderboard")
-            leaderboard = pd.read_csv(LEADERBOARD_DB) if os.path.exists(LEADERBOARD_DB) else pd.DataFrame()
+            leaderboard = load_leaderboard()
+
             if not leaderboard.empty:
                 st.write("🔝 **Top 5 XP Earners**")
                 top_xp = leaderboard.sort_values("XP Points", ascending=False).head(5)
